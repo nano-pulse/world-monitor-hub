@@ -18,6 +18,7 @@ export interface QuakeEvent {
   lat: number;
   lon: number;
   depthKm: number;
+  url?: string;
 }
 
 export interface NewsSource {
@@ -27,13 +28,17 @@ export interface NewsSource {
   enabledDefault: boolean;
 }
 
-export interface Signal {
+export type SignalSeverity = 'HIGH' | 'MEDIUM' | 'LOW';
+export type SignalKind = 'seismic-cluster' | 'major-quake' | 'elevated-activity' | 'regional-concentration';
+
+export interface SignalItem {
   id: string;
-  type: 'cluster' | 'anomaly' | 'trend' | 'alert';
+  severity: SignalSeverity;
+  kind: SignalKind;
+  timeISO: string;
   title: string;
   description: string;
-  severity: 'low' | 'medium' | 'high';
-  timeISO: string;
+  relatedQuakeIds: string[];
 }
 
 export type RegionPreset = 'global' | 'europe' | 'middle-east' | 'north-america' | 'asia';
@@ -59,12 +64,12 @@ export interface UIState {
   articleDrawerOpen: boolean;
 }
 
-export const REGION_BOUNDS: Record<RegionPreset, { minLat: number; maxLat: number; minLon: number; maxLon: number }> = {
-  global: { minLat: -90, maxLat: 90, minLon: -180, maxLon: 180 },
-  europe: { minLat: 35, maxLat: 72, minLon: -25, maxLon: 45 },
-  'middle-east': { minLat: 12, maxLat: 42, minLon: 25, maxLon: 65 },
-  'north-america': { minLat: 15, maxLat: 72, minLon: -170, maxLon: -50 },
-  asia: { minLat: -10, maxLat: 55, minLon: 60, maxLon: 150 },
+export const REGION_BOUNDS: Record<RegionPreset, { minLat: number; maxLat: number; minLon: number; maxLon: number; center: [number, number]; zoom: number }> = {
+  global: { minLat: -90, maxLat: 90, minLon: -180, maxLon: 180, center: [0, 20], zoom: 1.5 },
+  europe: { minLat: 35, maxLat: 72, minLon: -25, maxLon: 45, center: [10, 50], zoom: 3.5 },
+  'middle-east': { minLat: 12, maxLat: 42, minLon: 25, maxLon: 65, center: [45, 28], zoom: 4 },
+  'north-america': { minLat: 15, maxLat: 72, minLon: -170, maxLon: -50, center: [-100, 45], zoom: 3 },
+  asia: { minLat: -10, maxLat: 55, minLon: 60, maxLon: 150, center: [105, 25], zoom: 3 },
 };
 
 export const REGION_TAGS: Record<RegionPreset, string[]> = {

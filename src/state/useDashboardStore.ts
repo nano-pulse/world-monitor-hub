@@ -15,7 +15,11 @@ interface DashboardState {
   ui: UIState;
   enabledNewsSources: Record<string, boolean>;
   minMagnitude: number;
+  autoRefresh: boolean;
   loaded: boolean;
+  quakesUpdatedAt: string | null;
+  newsUpdatedAt: string | null;
+  signalsUpdatedAt: string | null;
 
   setRegionPreset: (r: RegionPreset) => void;
   setTimeWindow: (t: TimeWindow) => void;
@@ -24,17 +28,30 @@ interface DashboardState {
   selectNews: (id: string | null) => void;
   closeArticleDrawer: () => void;
   selectQuake: (id: string | null) => void;
+  clearSelectedQuake: () => void;
   toggleSource: (sourceId: string) => void;
   pinNews: (id: string) => void;
   unpinNews: (id: string) => void;
   toggleTheme: () => void;
   toggleDensity: () => void;
+  toggleAutoRefresh: () => void;
   setSourcesModalOpen: (open: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
   setNewsTab: (tab: NewsTab) => void;
   setMinMagnitude: (m: number) => void;
+  setQuakesUpdatedAt: (iso: string) => void;
+  setAllSources: (enabled: boolean) => void;
   resetAll: () => void;
   setLoaded: () => void;
+  applyUrlState: (p: Partial<{
+    regionPreset: RegionPreset;
+    timeWindow: TimeWindow;
+    newsTab: NewsTab;
+    enabledLayers: EnabledLayers;
+    minMagnitude: number;
+    theme: 'dark' | 'light';
+    density: 'comfortable' | 'compact';
+  }>) => void;
 }
 
 const defaultSources: Record<string, boolean> = {};
@@ -44,15 +61,19 @@ const initialState = {
   regionPreset: 'global' as RegionPreset,
   timeWindow: '24h' as TimeWindow,
   searchQuery: '',
-  enabledLayers: { earthquakes: true, protests: false, conflicts: false, wildfires: false, cyber: false, markets: false },
-  selectedNewsId: null,
-  selectedQuakeId: null,
+  enabledLayers: { earthquakes: true, protests: false, conflicts: false, wildfires: false, cyber: false, markets: false } as EnabledLayers,
+  selectedNewsId: null as string | null,
+  selectedQuakeId: null as string | null,
   pinnedNewsIds: [] as string[],
   newsTab: 'geopolitics' as NewsTab,
   ui: { theme: 'dark' as const, density: 'comfortable' as const, sourcesModalOpen: false, settingsOpen: false, articleDrawerOpen: false },
   enabledNewsSources: defaultSources,
   minMagnitude: 4.5,
+  autoRefresh: false,
   loaded: false,
+  quakesUpdatedAt: null as string | null,
+  newsUpdatedAt: null as string | null,
+  signalsUpdatedAt: null as string | null,
 };
 
 export const useDashboardStore = create<DashboardState>()(
@@ -64,23 +85,39 @@ export const useDashboardStore = create<DashboardState>()(
       setTimeWindow: (t) => set({ timeWindow: t }),
       setSearchQuery: (q) => set({ searchQuery: q }),
       toggleLayer: (layer) => set((s) => ({ enabledLayers: { ...s.enabledLayers, [layer]: !s.enabledLayers[layer] } })),
-      selectNews: (id) => set({ selectedNewsId: id, ui: { ...initialState.ui, articleDrawerOpen: id !== null } }),
+      selectNews: (id) => set((s) => ({ selectedNewsId: id, ui: { ...s.ui, articleDrawerOpen: id !== null } })),
       closeArticleDrawer: () => set((s) => ({ selectedNewsId: null, ui: { ...s.ui, articleDrawerOpen: false } })),
       selectQuake: (id) => set({ selectedQuakeId: id }),
+      clearSelectedQuake: () => set({ selectedQuakeId: null }),
       toggleSource: (sourceId) => set((s) => ({ enabledNewsSources: { ...s.enabledNewsSources, [sourceId]: !s.enabledNewsSources[sourceId] } })),
       pinNews: (id) => set((s) => ({ pinnedNewsIds: s.pinnedNewsIds.includes(id) ? s.pinnedNewsIds : [...s.pinnedNewsIds, id] })),
       unpinNews: (id) => set((s) => ({ pinnedNewsIds: s.pinnedNewsIds.filter(i => i !== id) })),
       toggleTheme: () => set((s) => ({ ui: { ...s.ui, theme: s.ui.theme === 'dark' ? 'light' : 'dark' } })),
       toggleDensity: () => set((s) => ({ ui: { ...s.ui, density: s.ui.density === 'comfortable' ? 'compact' : 'comfortable' } })),
+      toggleAutoRefresh: () => set((s) => ({ autoRefresh: !s.autoRefresh })),
       setSourcesModalOpen: (open) => set((s) => ({ ui: { ...s.ui, sourcesModalOpen: open } })),
       setSettingsOpen: (open) => set((s) => ({ ui: { ...s.ui, settingsOpen: open } })),
       setNewsTab: (tab) => set({ newsTab: tab }),
       setMinMagnitude: (m) => set({ minMagnitude: m }),
+      setQuakesUpdatedAt: (iso) => set({ quakesUpdatedAt: iso }),
+      setAllSources: (enabled) => set((s) => {
+        const next: Record<string, boolean> = {};
+        Object.keys(s.enabledNewsSources).forEach(k => { next[k] = enabled; });
+        return { enabledNewsSources: next };
+      }),
       resetAll: () => {
         localStorage.removeItem('world-monitor-state');
         set({ ...initialState, loaded: true });
       },
       setLoaded: () => set({ loaded: true }),
+      applyUrlState: (p) => set((s) => ({
+        ...(p.regionPreset ? { regionPreset: p.regionPreset } : {}),
+        ...(p.timeWindow ? { timeWindow: p.timeWindow } : {}),
+        ...(p.newsTab ? { newsTab: p.newsTab } : {}),
+        ...(p.enabledLayers ? { enabledLayers: { ...s.enabledLayers, ...p.enabledLayers } } : {}),
+        ...(p.minMagnitude !== undefined ? { minMagnitude: p.minMagnitude } : {}),
+        ...(p.theme || p.density ? { ui: { ...s.ui, ...(p.theme ? { theme: p.theme } : {}), ...(p.density ? { density: p.density } : {}) } } : {}),
+      })),
     }),
     {
       name: 'world-monitor-state',
@@ -90,20 +127,11 @@ export const useDashboardStore = create<DashboardState>()(
         enabledLayers: state.enabledLayers,
         enabledNewsSources: state.enabledNewsSources,
         pinnedNewsIds: state.pinnedNewsIds,
+        newsTab: state.newsTab,
         ui: { theme: state.ui.theme, density: state.ui.density },
         minMagnitude: state.minMagnitude,
+        autoRefresh: state.autoRefresh,
       }),
     }
   )
 );
-
-export function getShareUrl(): string {
-  const s = useDashboardStore.getState();
-  const params = new URLSearchParams();
-  params.set('region', s.regionPreset);
-  params.set('time', s.timeWindow);
-  params.set('tab', s.newsTab);
-  const layers = Object.entries(s.enabledLayers).filter(([, v]) => v).map(([k]) => k).join(',');
-  params.set('layers', layers);
-  return `${window.location.origin}${window.location.pathname}?${params.toString()}`;
-}

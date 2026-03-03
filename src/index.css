@@ -98,6 +98,12 @@
   .font-mono {
     font-family: var(--font-mono);
   }
+
+  /* Focus visible outlines for accessibility */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
 }
 
 @layer components {
@@ -162,4 +168,14 @@
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
   }
+}
+
+/* MapLibre overrides for dark theme */
+.maplibregl-ctrl-attrib {
+  font-size: 10px !important;
+  background: hsl(var(--card) / 0.8) !important;
+  color: hsl(var(--muted-foreground)) !important;
+}
+.maplibregl-ctrl-attrib a {
+  color: hsl(var(--primary)) !important;
 }
