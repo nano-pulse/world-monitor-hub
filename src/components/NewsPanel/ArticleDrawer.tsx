@@ -3,9 +3,18 @@ import { newsMock } from '../../data/news.mock';
 import { X, Pin, ExternalLink } from 'lucide-react';
 import { timeAgo } from '../../lib/time';
 import { toast } from 'sonner';
+import { useEffect } from 'react';
 
 export default function ArticleDrawer() {
   const { selectedNewsId, closeArticleDrawer, pinNews, unpinNews, pinnedNewsIds, ui } = useDashboardStore();
+
+  useEffect(() => {
+    if (!ui.articleDrawerOpen) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') closeArticleDrawer(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [ui.articleDrawerOpen, closeArticleDrawer]);
+
   if (!ui.articleDrawerOpen || !selectedNewsId) return null;
 
   const article = newsMock.find(n => n.id === selectedNewsId);
@@ -20,10 +29,10 @@ export default function ArticleDrawer() {
   return (
     <>
       <div className="fixed inset-0 bg-background/50 z-40" onClick={closeArticleDrawer} />
-      <div className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-card border-l border-border z-50 flex flex-col animate-in slide-in-from-right duration-200">
+      <div className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-card border-l border-border z-50 flex flex-col animate-in slide-in-from-right duration-200" role="dialog" aria-label="Article detail">
         <div className="flex items-center justify-between p-3 border-b border-border">
           <span className="text-sm font-semibold">Article</span>
-          <button onClick={closeArticleDrawer} className="p-1 rounded hover:bg-secondary text-muted-foreground"><X className="w-4 h-4" /></button>
+          <button onClick={closeArticleDrawer} className="p-1 rounded hover:bg-secondary text-muted-foreground" aria-label="Close article"><X className="w-4 h-4" /></button>
         </div>
         <div className="flex-1 overflow-auto p-4 space-y-4">
           <div className="flex items-center gap-2 text-xs text-muted-foreground font-mono">
@@ -45,6 +54,7 @@ export default function ArticleDrawer() {
           <button
             onClick={handlePin}
             className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border transition-colors ${isPinned ? 'border-warning text-warning' : 'border-border text-muted-foreground hover:text-foreground'}`}
+            aria-label={isPinned ? 'Unpin article' : 'Pin article'}
           >
             <Pin className="w-3 h-3" />
             {isPinned ? 'Unpin' : 'Pin'}

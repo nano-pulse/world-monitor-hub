@@ -1,63 +1,147 @@
+import { useEffect, useRef, useCallback } from 'react';
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import { useDashboardStore } from '../../state/useDashboardStore';
-import { quakesMock } from '../../data/quakes.mock';
+import type { QuakeEvent } from '../../data/types';
 import { REGION_BOUNDS } from '../../data/types';
 
-export default function MapContainer() {
-  const { enabledLayers, selectedQuakeId, selectQuake, regionPreset } = useDashboardStore();
-  const bounds = REGION_BOUNDS[regionPreset];
+const STYLE_URL = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
-  // Normalize lat/lon to percentage positions within the container
-  const normalize = (lat: number, lon: number) => {
-    const x = ((lon - bounds.minLon) / (bounds.maxLon - bounds.minLon)) * 100;
-    const y = ((bounds.maxLat - lat) / (bounds.maxLat - bounds.minLat)) * 100;
-    return { x: Math.max(2, Math.min(98, x)), y: Math.max(2, Math.min(98, y)) };
+function quakesToGeoJSON(quakes: QuakeEvent[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: quakes.map(q => ({
+      type: 'Feature' as const,
+      id: q.id,
+      properties: { id: q.id, magnitude: q.magnitude, place: q.place, timeISO: q.timeISO, depthKm: q.depthKm },
+      geometry: { type: 'Point' as const, coordinates: [q.lon, q.lat] },
+    })),
   };
+}
 
-  const visibleQuakes = enabledLayers.earthquakes
-    ? quakesMock.filter(q => q.lat >= bounds.minLat && q.lat <= bounds.maxLat && q.lon >= bounds.minLon && q.lon <= bounds.maxLon)
-    : [];
+interface Props {
+  quakes: QuakeEvent[];
+}
 
-  return (
-    <div className="w-full h-full bg-secondary relative overflow-hidden" style={{
-      backgroundImage: `
-        linear-gradient(hsl(var(--border) / 0.3) 1px, transparent 1px),
-        linear-gradient(90deg, hsl(var(--border) / 0.3) 1px, transparent 1px)
-      `,
-      backgroundSize: '40px 40px',
-    }}>
-      {/* Grid label */}
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <span className="text-muted-foreground/30 font-mono text-sm">MapLibre · deck.gl — pending integration</span>
-      </div>
+export default function MapContainer({ quakes }: Props) {
+  const mapRef = useRef<maplibregl.Map | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const { enabledLayers, selectedQuakeId, selectQuake, regionPreset } = useDashboardStore();
 
-      {/* Quake dots */}
-      {visibleQuakes.map(q => {
-        const pos = normalize(q.lat, q.lon);
-        const isSelected = selectedQuakeId === q.id;
-        const size = q.magnitude >= 6.0 ? 14 : q.magnitude >= 5.0 ? 10 : 7;
-        const color = q.magnitude >= 6.0 ? 'hsl(0, 65%, 50%)' : q.magnitude >= 5.0 ? 'hsl(38, 90%, 50%)' : 'hsl(175, 70%, 45%)';
+  // Initialize map
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return;
+    const bounds = REGION_BOUNDS[regionPreset];
+    const map = new maplibregl.Map({
+      container: containerRef.current,
+      style: STYLE_URL,
+      center: bounds.center,
+      zoom: bounds.zoom,
+      attributionControl: false,
+    });
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
-        return (
-          <button
-            key={q.id}
-            onClick={() => selectQuake(q.id)}
-            className="absolute rounded-full transition-all cursor-pointer hover:scale-150"
-            title={`M${q.magnitude} — ${q.place}`}
-            style={{
-              left: `${pos.x}%`,
-              top: `${pos.y}%`,
-              width: size,
-              height: size,
-              backgroundColor: color,
-              transform: 'translate(-50%, -50%)',
-              boxShadow: isSelected
-                ? `0 0 0 3px hsl(var(--background)), 0 0 0 5px ${color}, 0 0 12px ${color}`
-                : `0 0 4px ${color}`,
-              zIndex: isSelected ? 20 : 10,
-            }}
-          />
-        );
-      })}
-    </div>
-  );
+    map.on('load', () => {
+      map.addSource('quakes', { type: 'geojson', data: quakesToGeoJSON([]) });
+      map.addLayer({
+        id: 'quakes-circle',
+        type: 'circle',
+        source: 'quakes',
+        paint: {
+          'circle-color': [
+            'case',
+            ['>=', ['get', 'magnitude'], 6.0], 'hsl(0, 65%, 50%)',
+            ['>=', ['get', 'magnitude'], 5.0], 'hsl(38, 90%, 50%)',
+            'hsl(175, 70%, 45%)'
+          ],
+          'circle-radius': [
+            'interpolate', ['linear'], ['get', 'magnitude'],
+            4.5, 4, 5.0, 6, 6.0, 9, 7.0, 13
+          ],
+          'circle-opacity': 0.85,
+          'circle-stroke-width': 1,
+          'circle-stroke-color': 'rgba(255,255,255,0.3)',
+        },
+      });
+      // Selection highlight layer
+      map.addLayer({
+        id: 'quakes-highlight',
+        type: 'circle',
+        source: 'quakes',
+        filter: ['==', ['get', 'id'], ''],
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['get', 'magnitude'],
+            4.5, 10, 5.0, 13, 6.0, 17, 7.0, 22
+          ],
+          'circle-color': 'transparent',
+          'circle-stroke-width': 3,
+          'circle-stroke-color': '#fff',
+          'circle-opacity': 1,
+        },
+      });
+
+      // Click handler
+      map.on('click', 'quakes-circle', (e) => {
+        if (e.features?.[0]) {
+          selectQuake(e.features[0].properties.id);
+        }
+      });
+      map.on('mouseenter', 'quakes-circle', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'quakes-circle', () => { map.getCanvas().style.cursor = ''; });
+    });
+
+    mapRef.current = map;
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Fly to region on preset change
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const bounds = REGION_BOUNDS[regionPreset];
+    map.flyTo({ center: bounds.center, zoom: bounds.zoom, duration: 1200 });
+  }, [regionPreset]);
+
+  // Update quake data (debounced)
+  const updateSource = useCallback(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    const src = map.getSource('quakes') as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    const visible = enabledLayers.earthquakes ? quakes : [];
+    src.setData(quakesToGeoJSON(visible));
+    // Update layer visibility
+    map.setLayoutProperty('quakes-circle', 'visibility', enabledLayers.earthquakes ? 'visible' : 'none');
+    map.setLayoutProperty('quakes-highlight', 'visibility', enabledLayers.earthquakes ? 'visible' : 'none');
+  }, [quakes, enabledLayers.earthquakes]);
+
+  useEffect(() => {
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(updateSource, 150);
+    return () => clearTimeout(debounceRef.current);
+  }, [updateSource]);
+
+  // Highlight selected quake + fly to it
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+    if (selectedQuakeId) {
+      map.setFilter('quakes-highlight', ['==', ['get', 'id'], selectedQuakeId]);
+      const q = quakes.find(q => q.id === selectedQuakeId);
+      if (q) {
+        map.flyTo({ center: [q.lon, q.lat], zoom: Math.max(map.getZoom(), 5), duration: 800 });
+      }
+    } else {
+      map.setFilter('quakes-highlight', ['==', ['get', 'id'], '']);
+    }
+  }, [selectedQuakeId, quakes]);
+
+  return <div ref={containerRef} className="w-full h-full" />;
 }

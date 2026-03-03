@@ -3,9 +3,16 @@ import LayerToggles from './LayerToggles';
 import Legend from './Legend';
 import { useDashboardStore } from '../../state/useDashboardStore';
 import { Layers } from 'lucide-react';
+import { timeAgo } from '../../lib/time';
+import type { QuakeEvent } from '../../data/types';
 
-export default function MapPanel() {
+interface Props {
+  quakes: QuakeEvent[];
+}
+
+export default function MapPanel({ quakes }: Props) {
   const enabledLayers = useDashboardStore(s => s.enabledLayers);
+  const updatedAt = useDashboardStore(s => s.quakesUpdatedAt);
   const enabledCount = Object.values(enabledLayers).filter(Boolean).length;
 
   return (
@@ -16,11 +23,11 @@ export default function MapPanel() {
           <span>Map</span>
         </div>
         <span className="text-xs text-muted-foreground font-mono">
-          Layers: {enabledCount} enabled · Updated: 2m ago
+          Layers: {enabledCount} · Updated: {updatedAt ? timeAgo(updatedAt) : '—'}
         </span>
       </div>
       <div className="flex-1 relative overflow-hidden">
-        <MapContainer />
+        <MapContainer quakes={quakes} />
         <div className="absolute top-2 left-2 z-10">
           <LayerToggles />
         </div>
