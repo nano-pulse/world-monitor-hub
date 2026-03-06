@@ -4,13 +4,14 @@ import Legend from './Legend';
 import { useDashboardStore } from '../../state/useDashboardStore';
 import { Layers } from 'lucide-react';
 import { timeAgo } from '../../lib/time';
-import type { QuakeEvent } from '../../data/types';
+import type { QuakeEvent, FireEvent } from '../../data/types';
 
 interface Props {
   quakes: QuakeEvent[];
+  fires: FireEvent[];
 }
 
-export default function MapPanel({ quakes }: Props) {
+export default function MapPanel({ quakes, fires }: Props) {
   const enabledLayers = useDashboardStore(s => s.enabledLayers);
   const updatedAt = useDashboardStore(s => s.quakesUpdatedAt);
   const enabledCount = Object.values(enabledLayers).filter(Boolean).length;
@@ -27,7 +28,7 @@ export default function MapPanel({ quakes }: Props) {
         </span>
       </div>
       <div className="flex-1 relative overflow-hidden">
-        <MapContainer quakes={quakes} />
+        <MapContainer quakes={quakes} fires={fires} />
         <div className="absolute top-2 left-2 z-10">
           <LayerToggles />
         </div>

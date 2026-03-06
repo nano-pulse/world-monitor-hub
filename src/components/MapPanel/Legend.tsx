@@ -6,15 +6,27 @@ const levels = [
   { label: 'M6.0+', color: 'hsl(0, 65%, 50%)', size: 14 },
 ];
 
+const fireLegend = [
+  { label: 'Active Fire', color: 'hsl(25, 90%, 50%)', size: 8 },
+];
+
 export default function Legend() {
   const showQuakes = useDashboardStore(s => s.enabledLayers.earthquakes);
-  if (!showQuakes) return null;
+  const showFires = useDashboardStore(s => s.enabledLayers.wildfires);
+
+  if (!showQuakes && !showFires) return null;
 
   return (
-    <div className="bg-card/90 backdrop-blur-sm border border-border rounded px-2 py-1.5 flex items-center gap-3">
-      {levels.map(l => (
+    <div className="bg-card/90 backdrop-blur-sm border border-border rounded px-2 py-1.5 flex items-center gap-3 flex-wrap">
+      {showQuakes && levels.map(l => (
         <div key={l.label} className="flex items-center gap-1.5">
           <span className="rounded-full shrink-0" style={{ width: l.size, height: l.size, backgroundColor: l.color, boxShadow: `0 0 4px ${l.color}` }} />
+          <span className="text-[10px] font-mono text-muted-foreground">{l.label}</span>
+        </div>
+      ))}
+      {showFires && fireLegend.map(l => (
+        <div key={l.label} className="flex items-center gap-1.5">
+          <span className="rounded-full shrink-0" style={{ width: l.size, height: l.size, backgroundColor: l.color, boxShadow: `0 0 6px ${l.color}` }} />
           <span className="text-[10px] font-mono text-muted-foreground">{l.label}</span>
         </div>
       ))}
