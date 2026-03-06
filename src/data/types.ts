@@ -41,6 +41,15 @@ export interface SignalItem {
   relatedQuakeIds: string[];
 }
 
+export interface FireEvent {
+  id: string;
+  title: string;
+  timeISO: string;
+  lat: number;
+  lon: number;
+  sourceUrl: string;
+}
+
 export type RegionPreset = 'global' | 'europe' | 'middle-east' | 'north-america' | 'asia';
 export type TimeWindow = '1h' | '6h' | '24h' | '48h' | '7d';
 export type NewsTab = 'geopolitics' | 'tech' | 'finance' | 'local';

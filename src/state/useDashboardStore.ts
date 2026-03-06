@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { RegionPreset, TimeWindow, NewsTab, EnabledLayers, UIState } from '../data/types';
 import { sourcesMock } from '../data/sources.mock';
+import type { AIConfig } from '../services/ai';
 
 interface DashboardState {
   regionPreset: RegionPreset;
@@ -10,6 +11,7 @@ interface DashboardState {
   enabledLayers: EnabledLayers;
   selectedNewsId: string | null;
   selectedQuakeId: string | null;
+  selectedFireId: string | null;
   pinnedNewsIds: string[];
   newsTab: NewsTab;
   ui: UIState;
@@ -20,6 +22,8 @@ interface DashboardState {
   quakesUpdatedAt: string | null;
   newsUpdatedAt: string | null;
   signalsUpdatedAt: string | null;
+  newsProxyUrl: string;
+  aiConfig: AIConfig;
 
   setRegionPreset: (r: RegionPreset) => void;
   setTimeWindow: (t: TimeWindow) => void;
@@ -29,6 +33,7 @@ interface DashboardState {
   closeArticleDrawer: () => void;
   selectQuake: (id: string | null) => void;
   clearSelectedQuake: () => void;
+  selectFire: (id: string | null) => void;
   toggleSource: (sourceId: string) => void;
   pinNews: (id: string) => void;
   unpinNews: (id: string) => void;
@@ -41,6 +46,8 @@ interface DashboardState {
   setMinMagnitude: (m: number) => void;
   setQuakesUpdatedAt: (iso: string) => void;
   setAllSources: (enabled: boolean) => void;
+  setNewsProxyUrl: (url: string) => void;
+  setAIConfig: (config: Partial<AIConfig>) => void;
   resetAll: () => void;
   setLoaded: () => void;
   applyUrlState: (p: Partial<{
@@ -64,6 +71,7 @@ const initialState = {
   enabledLayers: { earthquakes: true, protests: false, conflicts: false, wildfires: false, cyber: false, markets: false } as EnabledLayers,
   selectedNewsId: null as string | null,
   selectedQuakeId: null as string | null,
+  selectedFireId: null as string | null,
   pinnedNewsIds: [] as string[],
   newsTab: 'geopolitics' as NewsTab,
   ui: { theme: 'dark' as const, density: 'comfortable' as const, sourcesModalOpen: false, settingsOpen: false, articleDrawerOpen: false },
@@ -74,6 +82,8 @@ const initialState = {
   quakesUpdatedAt: null as string | null,
   newsUpdatedAt: null as string | null,
   signalsUpdatedAt: null as string | null,
+  newsProxyUrl: '',
+  aiConfig: { enabled: false, baseUrl: '', model: '' } as AIConfig,
 };
 
 export const useDashboardStore = create<DashboardState>()(
@@ -89,6 +99,7 @@ export const useDashboardStore = create<DashboardState>()(
       closeArticleDrawer: () => set((s) => ({ selectedNewsId: null, ui: { ...s.ui, articleDrawerOpen: false } })),
       selectQuake: (id) => set({ selectedQuakeId: id }),
       clearSelectedQuake: () => set({ selectedQuakeId: null }),
+      selectFire: (id) => set({ selectedFireId: id }),
       toggleSource: (sourceId) => set((s) => ({ enabledNewsSources: { ...s.enabledNewsSources, [sourceId]: !s.enabledNewsSources[sourceId] } })),
       pinNews: (id) => set((s) => ({ pinnedNewsIds: s.pinnedNewsIds.includes(id) ? s.pinnedNewsIds : [...s.pinnedNewsIds, id] })),
       unpinNews: (id) => set((s) => ({ pinnedNewsIds: s.pinnedNewsIds.filter(i => i !== id) })),
@@ -105,6 +116,8 @@ export const useDashboardStore = create<DashboardState>()(
         Object.keys(s.enabledNewsSources).forEach(k => { next[k] = enabled; });
         return { enabledNewsSources: next };
       }),
+      setNewsProxyUrl: (url) => set({ newsProxyUrl: url }),
+      setAIConfig: (config) => set((s) => ({ aiConfig: { ...s.aiConfig, ...config } })),
       resetAll: () => {
         localStorage.removeItem('world-monitor-state');
         set({ ...initialState, loaded: true });
@@ -131,6 +144,8 @@ export const useDashboardStore = create<DashboardState>()(
         ui: { theme: state.ui.theme, density: state.ui.density },
         minMagnitude: state.minMagnitude,
         autoRefresh: state.autoRefresh,
+        newsProxyUrl: state.newsProxyUrl,
+        aiConfig: state.aiConfig,
       }),
     }
   )
