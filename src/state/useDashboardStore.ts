@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { RegionPreset, TimeWindow, NewsTab, EnabledLayers, UIState } from '../data/types';
-import { sourcesMock } from '../data/sources.mock';
+import type { RegionPreset, TimeWindow, NewsTab, EnabledLayers, UIState, NewsItem } from '../data/types';
+import { getDefaultEnabledFeeds } from '../data/feeds.registry';
 import type { AIConfig } from '../services/ai';
 
 interface DashboardState {
@@ -24,6 +24,7 @@ interface DashboardState {
   signalsUpdatedAt: string | null;
   newsProxyUrl: string;
   aiConfig: AIConfig;
+  newsItems: NewsItem[];
 
   setRegionPreset: (r: RegionPreset) => void;
   setTimeWindow: (t: TimeWindow) => void;
@@ -48,6 +49,7 @@ interface DashboardState {
   setAllSources: (enabled: boolean) => void;
   setNewsProxyUrl: (url: string) => void;
   setAIConfig: (config: Partial<AIConfig>) => void;
+  setNewsItems: (items: NewsItem[]) => void;
   resetAll: () => void;
   setLoaded: () => void;
   applyUrlState: (p: Partial<{
@@ -61,8 +63,7 @@ interface DashboardState {
   }>) => void;
 }
 
-const defaultSources: Record<string, boolean> = {};
-sourcesMock.forEach(s => { defaultSources[s.id] = s.enabledDefault; });
+const defaultSources = getDefaultEnabledFeeds();
 
 const initialState = {
   regionPreset: 'global' as RegionPreset,
@@ -84,6 +85,7 @@ const initialState = {
   signalsUpdatedAt: null as string | null,
   newsProxyUrl: '',
   aiConfig: { enabled: false, baseUrl: '', model: '' } as AIConfig,
+  newsItems: [] as NewsItem[],
 };
 
 export const useDashboardStore = create<DashboardState>()(
@@ -118,6 +120,7 @@ export const useDashboardStore = create<DashboardState>()(
       }),
       setNewsProxyUrl: (url) => set({ newsProxyUrl: url }),
       setAIConfig: (config) => set((s) => ({ aiConfig: { ...s.aiConfig, ...config } })),
+      setNewsItems: (items) => set({ newsItems: items }),
       resetAll: () => {
         localStorage.removeItem('world-monitor-state');
         set({ ...initialState, loaded: true });

@@ -1,120 +1,141 @@
 import type { NewsItem } from '../data/types';
 import { newsMock } from '../data/news.mock';
-import { feedsRegistry } from '../data/feeds.registry';
-import { cacheGet, cacheSet } from './cache';
-import { httpGet, trackError } from './http';
+import { cacheGet, cacheSet, cacheGetStale } from './cache';
 import { simpleHash } from './hash';
 import { REGION_TAGS } from '../data/types';
 import type { RegionPreset, NewsTab } from '../data/types';
+import { trackError } from './http';
 
-const NEWS_CACHE_TTL = 300_000; // 5 min
+const DIGEST_CACHE_TTL = 90_000; // 90s client TTL
 
-interface ProxyResponse {
+interface DigestResponse {
   items: Array<{
+    id: string;
     title: string;
-    link: string;
-    pubDate?: string;
-    isoDate?: string;
-    contentSnippet?: string;
-    content?: string;
-    categories?: string[];
+    url: string;
+    sourceId: string;
+    sourceName: string;
+    publishedAtISO: string;
+    category: string;
+    regionTags: string[];
+    tags: string[];
+    summary?: string;
   }>;
+  sourcesHealth: Array<{
+    feedId: string;
+    ok: boolean;
+    error?: string;
+    itemCount?: number;
+  }>;
+  generatedAtISO: string;
+  totalBeforeLimit: number;
+}
+
+function buildDigestUrl(opts: {
+  tab: NewsTab;
+  region: RegionPreset;
+  enabledFeedIds: string[];
+  limit: number;
+}): string {
+  const params = new URLSearchParams();
+  params.set('tab', opts.tab);
+  params.set('region', opts.region);
+  params.set('limit', String(opts.limit));
+  if (opts.enabledFeedIds.length > 0) {
+    params.set('enabled', opts.enabledFeedIds.join(','));
+  }
+  return `/api/news/digest?${params.toString()}`;
+}
+
+function cacheKey(tab: string, region: string, enabledHash: string): string {
+  return `newsDigest:${tab}:${region}:${enabledHash}`;
 }
 
 /**
- * Fetch news from configured proxy. Falls back to mock data if proxy unavailable.
+ * Fetch news: tries /api/news/digest first, falls back to mock data.
  */
 export async function fetchNews(opts: {
-  proxyUrl: string;
+  proxyUrl: string; // kept for backwards compat but ignored now
   enabledFeeds: Record<string, boolean>;
   tab: NewsTab;
   region: RegionPreset;
   searchQuery: string;
+  signal?: AbortSignal;
 }): Promise<{ items: NewsItem[]; sourcesOk: number; sourcesTotal: number; fromProxy: boolean }> {
-  const { proxyUrl, enabledFeeds, tab, region, searchQuery } = opts;
+  const { enabledFeeds, tab, region, searchQuery, signal } = opts;
 
-  // Determine which feeds to fetch
-  const feedsToFetch = feedsRegistry.filter(f => {
-    if (!enabledFeeds[f.id]) return false;
-    if (tab === 'local') return true; // filter by region after
-    if (tab === 'geopolitics') return f.category === 'geopolitics' || f.category === 'regional';
-    return f.category === tab;
-  });
+  const enabledIds = Object.keys(enabledFeeds).filter(k => enabledFeeds[k]);
+  const ek = simpleHash(enabledIds.sort().join(','));
+  const ck = cacheKey(tab, region, ek);
 
-  // If no proxy URL configured, use mock data
-  if (!proxyUrl) {
-    return useMockData(enabledFeeds, tab, region, searchQuery);
+  // Try digest endpoint
+  try {
+    // Check client cache first
+    const cached = cacheGet<DigestResponse>(ck, DIGEST_CACHE_TTL);
+    if (cached) {
+      const items = normalizeDigestItems(cached.items);
+      const filtered = filterItems(items, searchQuery, tab, region);
+      const okCount = cached.sourcesHealth.filter(s => s.ok).length;
+      return { items: filtered, sourcesOk: okCount, sourcesTotal: cached.sourcesHealth.length, fromProxy: true };
+    }
+
+    // Show stale while fetching
+    const stale = cacheGetStale<DigestResponse>(ck);
+
+    const url = buildDigestUrl({ tab, region, enabledFeedIds: enabledIds, limit: 80 });
+    const res = await fetch(url, {
+      signal,
+      headers: { Accept: 'application/json' },
+    });
+
+    if (res.ok) {
+      const data: DigestResponse = await res.json();
+      cacheSet(ck, data);
+      const items = normalizeDigestItems(data.items);
+      const filtered = filterItems(items, searchQuery, tab, region);
+      const okCount = data.sourcesHealth.filter(s => s.ok).length;
+      return { items: filtered, sourcesOk: okCount, sourcesTotal: data.sourcesHealth.length, fromProxy: true };
+    }
+
+    // If stale data exists, use it
+    if (stale) {
+      const items = normalizeDigestItems(stale.items);
+      const filtered = filterItems(items, searchQuery, tab, region);
+      return { items: filtered, sourcesOk: 0, sourcesTotal: 0, fromProxy: true };
+    }
+
+    // Fall through to mock
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
+    trackError('news:digest', err);
+
+    // Use stale if available
+    const stale = cacheGetStale<DigestResponse>(ck);
+    if (stale) {
+      const items = normalizeDigestItems(stale.items);
+      const filtered = filterItems(items, searchQuery, tab, region);
+      return { items: filtered, sourcesOk: 0, sourcesTotal: 0, fromProxy: true };
+    }
   }
 
-  const cacheKey = `news:${tab}:${region}:${simpleHash(JSON.stringify(Object.keys(enabledFeeds).filter(k => enabledFeeds[k])))}`;
-  const cached = cacheGet<NewsItem[]>(cacheKey, NEWS_CACHE_TTL);
-  if (cached) {
-    const filtered = filterItems(cached, searchQuery, tab, region);
-    return { items: filtered, sourcesOk: feedsToFetch.length, sourcesTotal: feedsToFetch.length, fromProxy: true };
-  }
-
-  let allItems: NewsItem[] = [];
-  let sourcesOk = 0;
-
-  // Fetch each feed through proxy
-  const results = await Promise.allSettled(
-    feedsToFetch.map(async (feed) => {
-      try {
-        const url = `${proxyUrl}?url=${encodeURIComponent(feed.url)}`;
-        const data = await httpGet<ProxyResponse>(url, { timeoutMs: 8000 });
-        sourcesOk++;
-        return (data.items || []).map(item => normalizeItem(item, feed));
-      } catch (err) {
-        trackError(`news:${feed.id}`, err);
-        return [];
-      }
-    })
-  );
-
-  for (const r of results) {
-    if (r.status === 'fulfilled') allItems.push(...r.value);
-  }
-
-  // Dedup by URL hash
-  allItems = dedup(allItems);
-  allItems.sort((a, b) => new Date(b.publishedAtISO).getTime() - new Date(a.publishedAtISO).getTime());
-
-  if (allItems.length > 0) {
-    cacheSet(cacheKey, allItems);
-  }
-
-  const filtered = filterItems(allItems, searchQuery, tab, region);
-  return { items: filtered, sourcesOk, sourcesTotal: feedsToFetch.length, fromProxy: true };
+  // Fallback to mock data
+  return useMockData(enabledFeeds, tab, region, searchQuery);
 }
 
-function normalizeItem(raw: any, feed: typeof feedsRegistry[0]): NewsItem {
-  const url = raw.link || raw.url || '';
-  return {
-    id: simpleHash(url || raw.title || String(Math.random())),
-    title: sanitizeText(raw.title || 'Untitled'),
-    url,
-    sourceId: feed.id,
-    sourceName: feed.name,
-    publishedAtISO: raw.isoDate || raw.pubDate || new Date().toISOString(),
-    category: feed.category === 'regional' ? 'geopolitics' : feed.category,
-    tags: (raw.categories || feed.regionTags || []).slice(0, 5),
-    summary: sanitizeText(raw.contentSnippet || raw.content || '').slice(0, 500),
-  };
-}
-
-function sanitizeText(text: string): string {
-  // Strip HTML tags
-  return text.replace(/<[^>]*>/g, '').replace(/&[a-z]+;/gi, ' ').trim();
-}
-
-function dedup(items: NewsItem[]): NewsItem[] {
-  const seen = new Set<string>();
-  return items.filter(item => {
-    const key = simpleHash(item.url || item.title);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+function normalizeDigestItems(raw: DigestResponse['items']): NewsItem[] {
+  return raw.map(item => ({
+    id: item.id,
+    title: item.title,
+    url: item.url,
+    sourceId: item.sourceId,
+    sourceName: item.sourceName,
+    publishedAtISO: item.publishedAtISO,
+    category: (item.category === 'geopolitics' || item.category === 'tech' || item.category === 'finance')
+      ? item.category
+      : 'geopolitics',
+    tags: item.tags || [],
+    summary: item.summary || '',
+  }));
 }
 
 function filterItems(items: NewsItem[], searchQuery: string, tab: NewsTab, region: RegionPreset): NewsItem[] {
@@ -136,7 +157,7 @@ function useMockData(enabledFeeds: Record<string, boolean>, tab: NewsTab, region
   fromProxy: boolean;
 } {
   const filtered = newsMock.filter(item => {
-    if (!enabledFeeds[item.sourceId] && enabledFeeds[item.sourceId] !== undefined) return false;
+    if (enabledFeeds[item.sourceId] === false) return false;
     if (searchQuery && !item.title.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     if (tab === 'local') {
       const tags = REGION_TAGS[region];
