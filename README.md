@@ -1,73 +1,76 @@
-# Welcome to your Lovable project
+# World Monitor — Global Intelligence Dashboard
 
-## Project info
+A command-center style dashboard for monitoring global events including earthquakes, wildfires, and news.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## What's Real
 
-## How can I edit this code?
+- **Earthquakes**: Live USGS GeoJSON data with caching, auto-refresh, and map markers
+- **Wildfires**: NASA EONET client-side fetching with map layer
+- **News**: RSS aggregation via Vercel Serverless Functions (allowlist-only proxy)
+- **Map**: MapLibre GL JS with interactive markers and selection sync
+- **Signals**: Deterministic rules engine derived from earthquake data
 
-There are several ways of editing your application.
+## What Remains Mock
 
-**Use Lovable**
+- News falls back to mock data when `/api/news/digest` is unavailable (e.g., local dev without Vercel)
+- AI features require a user-configured local LLM endpoint (Ollama/LM Studio)
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+## Architecture
 
-Changes made via Lovable will be committed automatically to this repo.
+### Frontend (Vite SPA)
+- React 18 + TypeScript + Tailwind CSS
+- Zustand for state management with localStorage persistence
+- MapLibre GL JS for map rendering
+- react-virtuoso for virtualized lists
 
-**Use your preferred IDE**
+### Backend (Vercel Serverless Functions)
+Located in `/api/`:
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+| Endpoint | Description |
+|---|---|
+| `GET /api/health` | Health check |
+| `GET /api/rss?feedId=<id>` | Single-feed RSS proxy (allowlist-only) |
+| `GET /api/news/digest?tab=&region=&limit=&enabled=` | Multi-feed aggregator with dedup + sort |
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+### RSS Security Model
+- **Allowlist-only**: The proxy only accepts `feedId` parameters that match feeds defined in `api/_lib/feeds.ts`
+- **No arbitrary URLs**: The client never sends raw URLs to the proxy
+- **SSRF prevention**: Feed URLs are resolved server-side from the registry
 
-Follow these steps:
+### Adding Feeds Safely
+1. Add the feed to both `api/_lib/feeds.ts` and `src/data/feeds.registry.ts`
+2. Use a stable kebab-case `id`
+3. Set `enabledDefault` appropriately
+4. Deploy — the new feed is immediately available
+
+### Caching
+- **Server**: `Cache-Control: s-maxage=300, stale-while-revalidate=600` on RSS; `s-maxage=180` on digest
+- **Client**: In-memory TTL cache (90s for digest, 60–180s for quakes)
+- **Stale-while-revalidate**: Shows cached data instantly, refreshes in background
+
+## Local Development
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+npm install
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+News will use mock data in local dev. To test real RSS, deploy to Vercel.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## Deploy to Vercel
 
-**Use GitHub Codespaces**
+1. Push to GitHub
+2. Import in Vercel — it auto-detects the Vite build + `/api/` serverless functions
+3. No env vars required for RSS (all feeds are public)
+4. For AI features, configure a local LLM endpoint in the Settings drawer
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+### Required for AI (optional)
+Configure in the app's Settings drawer:
+- **Base URL**: e.g., `http://localhost:1234/v1` (Ollama/LM Studio)
+- **Model**: e.g., `llama3.2`
 
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+## Next Steps
+- Add real RSS via deployed proxy
+- Add deck.gl layers for high-density visualization
+- Move caching to edge/Redis for multi-region
+- Add GDELT unrest layer
