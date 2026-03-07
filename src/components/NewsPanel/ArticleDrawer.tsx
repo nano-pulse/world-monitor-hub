@@ -1,5 +1,4 @@
 import { useDashboardStore } from '../../state/useDashboardStore';
-import { newsMock } from '../../data/news.mock';
 import { X, Pin, ExternalLink, Sparkles, Languages, Tags, Loader2 } from 'lucide-react';
 import { timeAgo } from '../../lib/time';
 import { toast } from 'sonner';
@@ -17,7 +16,7 @@ const LANGUAGES = [
 ];
 
 export default function ArticleDrawer() {
-  const { selectedNewsId, closeArticleDrawer, pinNews, unpinNews, pinnedNewsIds, ui, aiConfig } = useDashboardStore();
+  const { selectedNewsId, closeArticleDrawer, pinNews, unpinNews, pinnedNewsIds, ui, aiConfig, newsItems } = useDashboardStore();
 
   const [summaryResult, setSummaryResult] = useState<AISummaryResult | null>(null);
   const [translationResult, setTranslationResult] = useState<AITranslateResult | null>(null);
@@ -26,7 +25,6 @@ export default function ArticleDrawer() {
   const [showSummaryMenu, setShowSummaryMenu] = useState(false);
   const [showTranslateMenu, setShowTranslateMenu] = useState(false);
 
-  // Reset AI state on article change
   useEffect(() => {
     setSummaryResult(null);
     setTranslationResult(null);
@@ -45,7 +43,7 @@ export default function ArticleDrawer() {
 
   if (!ui.articleDrawerOpen || !selectedNewsId) return null;
 
-  const article = newsMock.find(n => n.id === selectedNewsId);
+  const article = newsItems.find(n => n.id === selectedNewsId);
   if (!article) return null;
 
   const isPinned = pinnedNewsIds.includes(article.id);
@@ -61,8 +59,8 @@ export default function ArticleDrawer() {
     try {
       const result = await aiSummarize(aiConfig, `${article.title}\n\n${article.summary}`, mode);
       setSummaryResult(result);
-    } catch (err: any) {
-      toast.error(err.message || 'AI summarization failed');
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'AI summarization failed');
     } finally {
       setAiLoading(null);
     }
@@ -75,8 +73,8 @@ export default function ArticleDrawer() {
     try {
       const result = await aiTranslate(aiConfig, `${article.title}\n\n${article.summary}`, lang);
       setTranslationResult(result);
-    } catch (err: any) {
-      toast.error(err.message || 'AI translation failed');
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'AI translation failed');
     } finally {
       setAiLoading(null);
     }
@@ -88,8 +86,8 @@ export default function ArticleDrawer() {
     try {
       const result = await aiClassify(aiConfig, article.title, article.summary);
       setClassifyResult(result);
-    } catch (err: any) {
-      toast.error(err.message || 'AI classification failed');
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'AI classification failed');
     } finally {
       setAiLoading(null);
     }
@@ -127,7 +125,6 @@ export default function ArticleDrawer() {
           </div>
           <p className="text-sm text-secondary-foreground leading-relaxed">{article.summary}</p>
 
-          {/* AI Results */}
           {aiLoading && (
             <div className="flex items-center gap-2 p-3 rounded bg-muted/50">
               <Loader2 className="w-4 h-4 animate-spin text-primary" />
@@ -158,7 +155,6 @@ export default function ArticleDrawer() {
           )}
         </div>
         <div className="p-3 border-t border-border space-y-2">
-          {/* AI Buttons row */}
           <div className="flex gap-1.5 flex-wrap">
             <div className="relative">
               <button
@@ -200,7 +196,6 @@ export default function ArticleDrawer() {
               <Tags className="w-3 h-3" /> Classify
             </button>
           </div>
-          {/* Action buttons */}
           <div className="flex gap-2">
             <button
               onClick={handlePin}

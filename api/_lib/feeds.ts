@@ -1,3 +1,9 @@
+/**
+ * Feed registry shared between API functions.
+ * Duplicated from src/data/feeds.registry.ts to avoid bundling issues
+ * in Vercel serverless functions.
+ */
+
 export type FeedCategory = 'geopolitics' | 'tech' | 'finance' | 'regional';
 export type RegionPreset = 'global' | 'europe' | 'middle-east' | 'north-america' | 'asia';
 
@@ -48,24 +54,12 @@ export const FEEDS: Feed[] = [
   { id: 'nikkei-markets', name: 'Nikkei Markets', category: 'finance', url: 'https://asia.nikkei.com/rss/feed/nar', enabledDefault: false, regionTags: ['asia'] },
 ];
 
-/** Look up a feed by ID (allowlist check) */
 export function getAllowedFeedById(feedId: string): Feed | undefined {
   return FEEDS.find(f => f.id === feedId);
 }
 
-/** Get feeds by category */
-export function getFeedsByCategory(category: FeedCategory): Feed[] {
-  return FEEDS.filter(f => f.category === category);
-}
-
-/** Default enabled sources map */
-export function getDefaultEnabledFeeds(): Record<string, boolean> {
+export function getDefaultEnabledMap(): Record<string, boolean> {
   const map: Record<string, boolean> = {};
   for (const f of FEEDS) map[f.id] = f.enabledDefault;
   return map;
-}
-
-/** Check if a URL is in the allowlist */
-export function isAllowlistedUrl(url: string): boolean {
-  return FEEDS.some(f => f.url === url);
 }

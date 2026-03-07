@@ -10,6 +10,7 @@ export function useNews() {
   const searchQuery = useDashboardStore(s => s.searchQuery);
   const enabledNewsSources = useDashboardStore(s => s.enabledNewsSources);
   const proxyUrl = useDashboardStore(s => s.newsProxyUrl);
+  const setNewsItems = useDashboardStore(s => s.setNewsItems);
 
   const [items, setItems] = useState<NewsItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -17,8 +18,14 @@ export function useNews() {
   const [fromProxy, setFromProxy] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const mountedRef = useRef(true);
+  const abortRef = useRef<AbortController | null>(null);
 
   const doFetch = useCallback(async (showLoading = true) => {
+    // Cancel any in-flight request
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     if (showLoading) setLoading(true);
     try {
       const result = await fetchNews({
@@ -27,25 +34,31 @@ export function useNews() {
         tab: newsTab,
         region: regionPreset,
         searchQuery,
+        signal: controller.signal,
       });
       if (!mountedRef.current) return;
       setItems(result.items);
+      setNewsItems(result.items);
       setSourcesHealth({ ok: result.sourcesOk, total: result.sourcesTotal });
       setFromProxy(result.fromProxy);
       setUpdatedAt(new Date().toISOString());
-    } catch (err: any) {
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       if (!mountedRef.current) return;
       toast.error('Failed to load news');
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [proxyUrl, enabledNewsSources, newsTab, regionPreset, searchQuery]);
+  }, [proxyUrl, enabledNewsSources, newsTab, regionPreset, searchQuery, setNewsItems]);
 
   useEffect(() => {
     mountedRef.current = true;
-    // Simulate small delay for mock data
     const delay = setTimeout(() => doFetch(), 200);
-    return () => { mountedRef.current = false; clearTimeout(delay); };
+    return () => {
+      mountedRef.current = false;
+      clearTimeout(delay);
+      abortRef.current?.abort();
+    };
   }, [doFetch]);
 
   return { items, loading, sourcesHealth, fromProxy, updatedAt, refetch: () => doFetch(false) };
