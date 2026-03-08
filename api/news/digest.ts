@@ -3,7 +3,16 @@ import RSSParser from 'rss-parser';
 import { FEEDS, getAllowedFeedById } from '../_lib/feeds';
 import type { Feed, FeedCategory, RegionPreset } from '../_lib/feeds';
 
-const parser = new RSSParser({ timeout: 8000 });
+const parser = new RSSParser({
+  timeout: 8000,
+  headers: {
+    'User-Agent': 'WorldMonitor/1.0 (RSS Aggregator; +https://github.com/worldmonitor)',
+    'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
+  },
+  requestOptions: {
+    redirect: 'follow',
+  },
+});
 
 interface NormalizedItem {
   id: string;
@@ -41,19 +50,38 @@ function sanitize(text: string): string {
   return text.replace(/<[^>]*>/g, '').replace(/&[a-z]+;/gi, ' ').trim();
 }
 
+function normalizeUrl(rawUrl: string): string {
+  if (!rawUrl) return '';
+  const trimmed = rawUrl.trim();
+  try {
+    const u = new URL(trimmed);
+    ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'].forEach(p => u.searchParams.delete(p));
+    return u.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
 function normalizeItem(raw: RSSParser.Item, feed: Feed): NormalizedItem {
-  const url = raw.link || '';
+  const url = normalizeUrl(raw.link || '');
   const title = sanitize(raw.title || 'Untitled');
-  const pubDate = raw.isoDate || raw.pubDate || '';
   const tags: string[] = [...(feed.regionTags || [])];
+
+  const dateCandidate = raw.isoDate || raw.pubDate || (raw as Record<string, unknown>)['updated'] as string || '';
   let publishedAtISO: string;
 
-  try {
-    publishedAtISO = pubDate ? new Date(pubDate).toISOString() : new Date().toISOString();
-    if (!pubDate) tags.push('inferred-date');
-  } catch {
+  if (dateCandidate) {
+    try {
+      const d = new Date(dateCandidate);
+      publishedAtISO = !isNaN(d.getTime()) ? d.toISOString() : new Date().toISOString();
+      if (isNaN(d.getTime())) tags.push('time_inferred');
+    } catch {
+      publishedAtISO = new Date().toISOString();
+      tags.push('time_inferred');
+    }
+  } else {
     publishedAtISO = new Date().toISOString();
-    tags.push('inferred-date');
+    tags.push('time_inferred');
   }
 
   const snippet = sanitize(raw.contentSnippet || raw.content || '').slice(0, 500);
@@ -72,24 +100,21 @@ function normalizeItem(raw: RSSParser.Item, feed: Feed): NormalizedItem {
   };
 }
 
-function selectFeeds(
-  tab: string,
-  region: string,
-  enabledIds: string[] | null
-): Feed[] {
+function selectFeeds(tab: string, region: string, enabledIds: string[] | null): Feed[] {
   let pool = FEEDS;
 
-  // Filter by enabled IDs if provided, otherwise use defaults
   if (enabledIds && enabledIds.length > 0) {
     const validIds = new Set(enabledIds.filter(id => getAllowedFeedById(id)));
-    pool = pool.filter(f => validIds.has(f.id));
+    if (validIds.size > 0) {
+      pool = pool.filter(f => validIds.has(f.id));
+    } else {
+      pool = pool.filter(f => f.enabledDefault);
+    }
   } else {
     pool = pool.filter(f => f.enabledDefault);
   }
 
-  // Filter by tab/category
   if (tab === 'local') {
-    // For local, include feeds with matching regionTags
     const validRegion = region as RegionPreset;
     if (validRegion && validRegion !== 'global') {
       pool = pool.filter(f =>
@@ -110,7 +135,23 @@ function selectFeeds(
   return pool;
 }
 
-// Concurrency limiter
+async function fetchFeedWithRetry(feed: Feed, retries = 1): Promise<{ feed: Feed; items: NormalizedItem[] }> {
+  let lastErr: Error | undefined;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const parsed = await parser.parseURL(feed.url);
+      const items = (parsed.items || []).map(item => normalizeItem(item, feed));
+      return { feed, items };
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 async function fetchWithConcurrency<T>(
   tasks: (() => Promise<T>)[],
   concurrency: number
@@ -148,48 +189,62 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   for (const [k, v] of Object.entries(CORS_HEADERS)) res.setHeader(k, v);
 
-  const tab = (typeof req.query.tab === 'string' ? req.query.tab : 'geopolitics');
-  const region = (typeof req.query.region === 'string' ? req.query.region : 'global');
+  const tab = typeof req.query.tab === 'string' ? req.query.tab : 'geopolitics';
+  const region = typeof req.query.region === 'string' ? req.query.region : 'global';
   const limitRaw = parseInt(typeof req.query.limit === 'string' ? req.query.limit : '60', 10);
   const limit = Math.max(1, Math.min(isNaN(limitRaw) ? 60 : limitRaw, 120));
   const enabledParam = typeof req.query.enabled === 'string' ? req.query.enabled : '';
   const enabledIds = enabledParam ? enabledParam.split(',').filter(Boolean) : null;
 
   const feeds = selectFeeds(tab, region, enabledIds);
+  const isDebug = process.env.DEBUG_NEWS === '1';
+
+  if (isDebug) {
+    res.setHeader('X-WorldMonitor-Debug', '1');
+  }
 
   if (feeds.length === 0) {
-    return res.status(200).json({
+    const body: Record<string, unknown> = {
       items: [],
       sourcesHealth: [],
       generatedAtISO: new Date().toISOString(),
       totalBeforeLimit: 0,
-    });
+      totalAfterDedup: 0,
+    };
+    if (isDebug) {
+      body.debug = {
+        requestedTab: tab,
+        requestedRegion: region,
+        enabledFeedIds: enabledIds || [],
+        fetchedFeedCount: 0,
+        okFeedCount: 0,
+        failedFeedCount: 0,
+        totalItemsBeforeDedup: 0,
+        totalItemsAfterDedup: 0,
+        totalItemsAfterSort: 0,
+        totalReturned: 0,
+      };
+    }
+    return res.status(200).json(body);
   }
 
   const sourcesHealth: SourceHealth[] = [];
   const allItems: NormalizedItem[] = [];
 
-  const tasks = feeds.map(feed => async () => {
-    const parsed = await parser.parseURL(feed.url);
-    return { feed, parsed };
-  });
-
-  const results = await fetchWithConcurrency(tasks, 6);
+  const tasks = feeds.map(feed => () => fetchFeedWithRetry(feed, 1));
+  const results = await fetchWithConcurrency(tasks, 5);
 
   for (let i = 0; i < results.length; i++) {
     const feed = feeds[i];
     const result = results[i];
 
     if (result.status === 'fulfilled') {
-      const items = (result.value.parsed.items || []).map(item =>
-        normalizeItem(item, feed)
-      );
-      allItems.push(...items);
+      allItems.push(...result.value.items);
       sourcesHealth.push({
         feedId: feed.id,
         ok: true,
         fetchedAtISO: new Date().toISOString(),
-        itemCount: items.length,
+        itemCount: result.value.items.length,
       });
     } else {
       const errMsg = result.reason instanceof Error ? result.reason.message : 'Unknown error';
@@ -201,37 +256,80 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  // Dedup by URL hash, then title hash
+  const totalItemsBeforeDedup = allItems.length;
+
+  // Dedup: primary by normalized URL, fallback by title hash
   const seen = new Set<string>();
   const deduped = allItems.filter(item => {
-    const key = simpleHash(item.url || item.title);
+    const urlKey = item.url ? simpleHash(item.url) : null;
+    const titleKey = simpleHash(item.title + ':' + item.publishedAtISO.slice(0, 10));
+    const key = urlKey || titleKey;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 
-  // Sort by date desc
   deduped.sort((a, b) =>
     new Date(b.publishedAtISO).getTime() - new Date(a.publishedAtISO).getTime()
   );
 
-  const totalBeforeLimit = deduped.length;
+  const totalAfterDedup = deduped.length;
   const items = deduped.slice(0, limit);
 
   const okCount = sourcesHealth.filter(s => s.ok).length;
+  const failedCount = sourcesHealth.filter(s => !s.ok).length;
+
   if (okCount === 0 && feeds.length > 0) {
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(502).json({
+    const body: Record<string, unknown> = {
       error: 'All feeds failed',
+      items: [],
       sourcesHealth,
-    });
+      generatedAtISO: new Date().toISOString(),
+      totalBeforeLimit: 0,
+      totalAfterDedup: 0,
+    };
+    if (isDebug) {
+      body.debug = {
+        requestedTab: tab,
+        requestedRegion: region,
+        enabledFeedIds: enabledIds || [],
+        fetchedFeedCount: feeds.length,
+        okFeedCount: 0,
+        failedFeedCount: failedCount,
+        totalItemsBeforeDedup: 0,
+        totalItemsAfterDedup: 0,
+        totalItemsAfterSort: 0,
+        totalReturned: 0,
+      };
+    }
+    return res.status(502).json(body);
   }
 
   res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=600');
-  return res.json({
+
+  const body: Record<string, unknown> = {
     items,
     sourcesHealth,
     generatedAtISO: new Date().toISOString(),
-    totalBeforeLimit,
-  });
+    totalBeforeLimit: totalAfterDedup,
+    totalAfterDedup,
+  };
+
+  if (isDebug) {
+    body.debug = {
+      requestedTab: tab,
+      requestedRegion: region,
+      enabledFeedIds: enabledIds || [],
+      fetchedFeedCount: feeds.length,
+      okFeedCount: okCount,
+      failedFeedCount: failedCount,
+      totalItemsBeforeDedup,
+      totalItemsAfterDedup: totalAfterDedup,
+      totalItemsAfterSort: totalAfterDedup,
+      totalReturned: items.length,
+    };
+  }
+
+  return res.json(body);
 }
