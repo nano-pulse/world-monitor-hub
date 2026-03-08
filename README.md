@@ -118,9 +118,36 @@ Set `DEBUG_NEWS=1` as a Vercel environment variable. The digest response will in
 - **Invalid XML**: Parser handles gracefully; feed is marked as failed in `sourcesHealth`.
 - **To shrink feed set for stability**: Only enable feeds with `enabledDefault: true` — these are tested to work reliably.
 
-## Deployment
+## Deployment (Vercel)
 
-This project intentionally does not pin Node in `package.json`. Set the Node.js version in **Vercel Project Settings** to match your Vercel environment.
+This repo intentionally does **NOT** pin a Node version in `package.json` (no `engines` field, no `.nvmrc`, no `.node-version`).
+
+**Set the Node.js version ONLY in Vercel Project Settings → General → Node.js Version.**
+
+- If Vercel build logs mention Node 18.x compatibility issues, set it to **18.x** in settings.
+- If Vercel defaults to 20.x or later and builds succeed, leave it.
+- Do **NOT** add conflicting Node version files to the repo.
+
+> **Why?** Vercel Project Settings are the single source of truth. Repo-side pinning causes flip-flop failures when Vercel's runtime and build environments disagree.
+
+### Routing
+
+`vercel.json` uses Vercel's `routes` array to ensure `/api/*` always hits serverless functions and is **never** rewritten to `index.html` for SPA routing.
+
+### Quick Smoke Test (after deploy)
+
+```
+GET /api/health       → { ok: true, node: "v20.x.x", ... }
+GET /api/news/debug   → { ok: true/false, items: N, ... }
+GET /api/news/digest?tab=geopolitics&region=global&limit=10
+```
+
+### Build Diagnostics
+
+Run locally to print the active Node version:
+```sh
+npm run diagnose:node
+```
 
 ## Next Steps
 - Add deck.gl layers for high-density visualization
