@@ -118,6 +118,10 @@ Set `DEBUG_NEWS=1` as a Vercel environment variable. The digest response will in
 - **Invalid XML**: Parser handles gracefully; feed is marked as failed in `sourcesHealth`.
 - **To shrink feed set for stability**: Only enable feeds with `enabledDefault: true` — these are tested to work reliably.
 
+## Deployment
+
+This project intentionally does not pin Node in `package.json`. Set the Node.js version in **Vercel Project Settings** to match your Vercel environment.
+
 ## Next Steps
 - Add deck.gl layers for high-density visualization
 - Move caching to edge/Redis for multi-region
