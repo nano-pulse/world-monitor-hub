@@ -31,6 +31,7 @@ Located in `/api/`:
 | `GET /api/health` | Health check |
 | `GET /api/rss?feedId=<id>` | Single-feed RSS proxy (allowlist-only) |
 | `GET /api/news/digest?tab=&region=&limit=&enabled=` | Multi-feed aggregator with dedup + sort |
+| `GET /api/news/debug` | Smoke test — fetches 2 reliable feeds, returns item count + failures |
 
 ### RSS Security Model
 - **Allowlist-only**: The proxy only accepts `feedId` parameters that match feeds defined in `api/_lib/feeds.ts`
@@ -64,13 +65,60 @@ News will use mock data in local dev. To test real RSS, deploy to Vercel.
 3. No env vars required for RSS (all feeds are public)
 4. For AI features, configure a local LLM endpoint in the Settings drawer
 
+### Environment Variables (optional)
+
+| Variable | Description |
+|---|---|
+| `DEBUG_NEWS` | Set to `1` to include debug fields in `/api/news/digest` response and add `X-WorldMonitor-Debug` header |
+
 ### Required for AI (optional)
 Configure in the app's Settings drawer:
 - **Base URL**: e.g., `http://localhost:1234/v1` (Ollama/LM Studio)
 - **Model**: e.g., `llama3.2`
 
+## Production Smoke Test Checklist
+
+After deploying, verify these endpoints return valid JSON:
+
+```
+GET /api/health
+→ { ok: true, ts: "...", version: "v1" }
+
+GET /api/news/debug
+→ { ok: true/false, testedFeeds: [...], items: N, failures: [...], ts: "..." }
+
+GET /api/rss?feedId=bbc-world
+→ { feed: {...}, items: [...], sourceHealth: {...}, fetchedAtISO: "..." }
+
+GET /api/news/digest?tab=geopolitics&region=global&limit=30
+→ { items: [...], sourcesHealth: [...], generatedAtISO: "...", totalBeforeLimit: N }
+```
+
+### Enabling Debug Mode
+Set `DEBUG_NEWS=1` as a Vercel environment variable. The digest response will include:
+```json
+{
+  "debug": {
+    "requestedTab": "geopolitics",
+    "requestedRegion": "global",
+    "enabledFeedIds": [],
+    "fetchedFeedCount": 6,
+    "okFeedCount": 5,
+    "failedFeedCount": 1,
+    "totalItemsBeforeDedup": 120,
+    "totalItemsAfterDedup": 95,
+    "totalReturned": 30
+  }
+}
+```
+
+### Typical Failure Causes
+- **Feed blocks server IP**: Some feeds (Reuters, FT, Bloomberg) may block datacenter IPs. These are set to `enabledDefault: false`.
+- **Timeout**: Default 8s timeout. Some feeds are slow; they'll fail gracefully and other feeds still return.
+- **Invalid XML**: Parser handles gracefully; feed is marked as failed in `sourcesHealth`.
+- **To shrink feed set for stability**: Only enable feeds with `enabledDefault: true` — these are tested to work reliably.
+
 ## Next Steps
-- Add real RSS via deployed proxy
 - Add deck.gl layers for high-density visualization
 - Move caching to edge/Redis for multi-region
 - Add GDELT unrest layer
